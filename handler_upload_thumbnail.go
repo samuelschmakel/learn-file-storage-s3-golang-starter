@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -53,11 +55,13 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	bytes, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "couldn't read the image data", err)
-		return
-	}
+	/*
+		data, err := io.ReadAll(file)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "couldn't read the image data", err)
+			return
+		}
+	*/
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
@@ -69,19 +73,34 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	thumbnail := thumbnail{
-		data:      bytes,
-		mediaType: mediaType,
+	fmt.Printf("cfg.assetsRoot: %s\n", cfg.assetsRoot)
+	fmt.Printf("mediaType: %s", mediaType)
+	filePath := filepath.Join(cfg.assetsRoot, videoID.String())
+
+	ext := ""
+	if mediaType == "image/png" {
+		ext = "png"
+	}
+	filePath = fmt.Sprintf("%s.%s", filePath, ext)
+	fmt.Printf("Here's the filepath: %s\n", filePath)
+	destFile, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create file", nil)
+		return
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't copy contents", nil)
+		return
 	}
 
-	videoThumbnails[videoID] = thumbnail
-
-	url := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
-	video.ThumbnailURL = &url
+	thumbnailURLpath := fmt.Sprintf("http://localhost:%s/%s", cfg.port, filePath)
+	video.ThumbnailURL = &thumbnailURLpath
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		delete(videoThumbnails, videoID)
 		respondWithError(w, http.StatusInternalServerError, "couldn't update database with new thumbnail url", err)
 		return
 	}
