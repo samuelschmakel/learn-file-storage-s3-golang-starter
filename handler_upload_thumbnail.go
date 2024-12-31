@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -78,16 +80,20 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fmt.Printf("cfg.assetsRoot: %s\n", cfg.assetsRoot)
-	fmt.Printf("mediaType: %s", mediaType)
-	filePath := filepath.Join(cfg.assetsRoot, videoID.String())
+	mySlice := make([]byte, 32)
+	_, err = rand.Read(mySlice)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create byte slice", nil)
+		return
+	}
+	base64String := base64.RawURLEncoding.EncodeToString(mySlice)
+	filePath := filepath.Join(cfg.assetsRoot, base64String)
 
 	ext := ""
 	if mediaType == "image/png" {
 		ext = "png"
 	}
 	filePath = fmt.Sprintf("%s.%s", filePath, ext)
-	fmt.Printf("Here's the filepath: %s\n", filePath)
 	destFile, err := os.Create(filePath)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create file", nil)
