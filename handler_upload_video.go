@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"io"
 	"log"
@@ -106,19 +105,51 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		fileKey = "other/" + fileKey
 	}
 
-	// Generate 16-byte slice (32 characters in hex)
-	randomBytes := make([]byte, 16)
-	_, err = rand.Read(randomBytes)
+	processedFilePath, err := processVideoForFastStart(tempFile.Name())
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to generate random bytes", nil)
+		respondWithError(w, http.StatusInternalServerError, "Failed to get aspect ratio", err)
+		return
+	}
+	defer os.Remove(processedFilePath)
+
+	processedFile, err := os.Open(processedFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to open processed file", err)
+		return
+	}
+	defer processedFile.Close()
+
+	// Read first 200 bytes to check for moov
+	buffer := make([]byte, 200)
+	_, err = processedFile.Read(buffer)
+	if err != nil {
+		fmt.Println("Error!")
+	}
+	fmt.Printf("First 200 bytes: %x\n", buffer)
+
+	_, err = processedFile.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to reset file pointer", err)
 		return
 	}
 
+	// Generate 16-byte slice (32 characters in hex)
+	buf := make([]byte, 200)
+	_, err = processedFile.Read(buf)
+	if err != nil {
+		log.Printf("Error reading processed file: %v", err)
+	} else {
+		log.Printf("First 200 bytes of processed file before S3 upload: %x", buf)
+	}
+	// Don't forget to seek back to start of file
+	processedFile.Seek(0, 0)
+
 	params := &s3.PutObjectInput{
-		Bucket:      aws.String(cfg.s3Bucket),
-		Key:         aws.String(fileKey),
-		Body:        tempFile,
-		ContentType: aws.String("video/mp4"),
+		Bucket:       aws.String(cfg.s3Bucket),
+		Key:          aws.String(fileKey),
+		Body:         processedFile,
+		ContentType:  aws.String("video/mp4"),
+		CacheControl: aws.String("public, max-age=31536000"),
 	}
 
 	_, err = cfg.s3Client.PutObject(context.TODO(), params)
