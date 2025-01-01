@@ -68,24 +68,42 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	destFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	tempFile, err := os.CreateTemp("", "tubely-upload.mp4")
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Invalid file type", nil)
 		return
 	}
-	defer os.Remove(destFile.Name())
-	defer destFile.Close()
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
 
-	_, err = io.Copy(destFile, file)
+	_, err = io.Copy(tempFile, file)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't copy contents", nil)
 		return
 	}
 
-	_, err = destFile.Seek(0, io.SeekStart)
+	_, err = tempFile.Seek(0, io.SeekStart)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't reset file pointer", nil)
 		return
+	}
+
+	fmt.Printf("Here's the name of the tempFile: %s\n", tempFile.Name())
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to get aspect ratio", err)
+		return
+	}
+
+	fileKey := getAssetPath(mediaType)
+	fmt.Printf("aspect ratio: %s\n", aspectRatio)
+
+	if aspectRatio == "16:9" {
+		fileKey = "landscape/" + fileKey
+	} else if aspectRatio == "9:16" {
+		fileKey = "portrait/" + fileKey
+	} else {
+		fileKey = "other/" + fileKey
 	}
 
 	// Generate 16-byte slice (32 characters in hex)
@@ -96,19 +114,12 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	fileKey := getAssetPath(mediaType)
-
 	params := &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(fileKey),
-		Body:        destFile,
+		Body:        tempFile,
 		ContentType: aws.String("video/mp4"),
 	}
-
-	fmt.Printf("params Bucket: %s\n", *params.Bucket)
-	fmt.Printf("params Key: %s\n", *params.Key)
-	fmt.Printf("params Body: %s\n", params.Body)
-	fmt.Printf("params ContentType: %s\n", *params.ContentType)
 
 	_, err = cfg.s3Client.PutObject(context.TODO(), params)
 	if err != nil {
@@ -121,6 +132,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	vidURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, fileKey)
 	video.VideoURL = &vidURL
 
+	fmt.Printf("Here's the updated URL: %s\n", vidURL)
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "couldn't update database with new thumbnail url", err)
