@@ -88,7 +88,7 @@ func main() {
 	// AWS config
 	ctx := context.TODO()
 
-	AWScfg, err := config.LoadDefaultConfig(ctx)
+	AWScfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(s3Region))
 	if err != nil {
 		log.Fatalf("failed to load AWS configuration, %v", err)
 	}

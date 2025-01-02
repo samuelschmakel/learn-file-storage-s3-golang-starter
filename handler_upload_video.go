@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -95,15 +96,16 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	fileKey := getAssetPath(mediaType)
-	fmt.Printf("aspect ratio: %s\n", aspectRatio)
+	fmt.Printf("fileKey: %s\n", fileKey)
 
 	if aspectRatio == "16:9" {
-		fileKey = "landscape/" + fileKey
+		fileKey = "landscape/horizontal.mp4"
 	} else if aspectRatio == "9:16" {
-		fileKey = "portrait/" + fileKey
+		fileKey = "portrait/vertical.mp4"
 	} else {
-		fileKey = "other/" + fileKey
+		fileKey = "other.mp4"
 	}
+	fmt.Printf("fileKey: %s\n", fileKey)
 
 	processedFilePath, err := processVideoForFastStart(tempFile.Name())
 	if err != nil {
@@ -137,12 +139,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	buf := make([]byte, 200)
 	_, err = processedFile.Read(buf)
 	if err != nil {
-		log.Printf("Error reading processed file: %v", err)
+		log.Printf("Error reading processed file: %v\n", err)
 	} else {
-		log.Printf("First 200 bytes of processed file before S3 upload: %x", buf)
+		log.Printf("First 200 bytes of processed file before S3 upload: %x\n", buf)
 	}
 	// Don't forget to seek back to start of file
 	processedFile.Seek(0, 0)
+
+	fmt.Printf("Here's the vid_url: %s,%s\n", cfg.s3Bucket, fileKey)
 
 	params := &s3.PutObjectInput{
 		Bucket:       aws.String(cfg.s3Bucket),
@@ -160,7 +164,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Update the VideoURL of the video record in the database
-	vidURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, fileKey)
+	vidURL := fmt.Sprintf("%s,%s", cfg.s3Bucket, fileKey)
 	video.VideoURL = &vidURL
 
 	fmt.Printf("Here's the updated URL: %s\n", vidURL)
@@ -170,5 +174,30 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	video, err = cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "couldn't sign video", err)
+		return
+	}
+
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
+	// Create a presigning client
+	presignClient := s3.NewPresignClient(s3Client)
+
+	// Set up input parameters
+	params := &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	}
+
+	// Generate the presigned URL
+	req, err := presignClient.PresignGetObject(context.TODO(), params, s3.WithPresignExpires(expireTime))
+	if err != nil {
+		return "", err
+	}
+
+	return req.URL, nil
 }
